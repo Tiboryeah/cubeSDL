@@ -1,0 +1,11 @@
+# ninja log v6
+77	2983	7524872471468758	CMakeFiles/sdl2_basic.dir/main.c.obj	541896b77a429b96
+33	610	7523808154106767	CMakeFiles/sdl2_basic.dir/mesh.c.obj	a98a8ed1736dfbd6
+2	190	7524888241650145	build.ninja	55be7d09b2a9be8f
+2984	3540	7524872500537688	sdl2_basic.exe	86f518829fb505e9
+6	382	7519676447474183	CMakeFiles/sdl2_basic.dir/display.c.obj	903098caa16a961b
+24	621	7523808154011646	CMakeFiles/sdl2_basic.dir/vector.c.obj	9008304a9631a465
+20	105	7523808153971642	CMakeFiles/sdl2_basic.dir/matrix.c.obj	b95af0c629375989
+28	580	7523808154061630	CMakeFiles/sdl2_basic.dir/triangle.c.obj	6f73b4dd2038047d
+61	362	7519466326961292	CMakeFiles/sdl2_basic.dir/array.c.obj	65402ea9fa36c240
+4	457	7524888241650145	build.ninja	f503987acb47f22d
