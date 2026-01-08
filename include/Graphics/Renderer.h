@@ -21,35 +21,41 @@ private:
   // Parametros de camara
   float fov_factor = 640.0f; // Ajuste manual de FOV
 
+public:
   // Render Flags
   bool renderTriangles = true;
   bool renderLines = true;
   bool renderPoints = false;
-  bool renderBackface =
-      false; // Por defecto culling enabled (no renderizar backfaces)
+  bool renderBackface = false; // Por defecto culling enabled
   bool isPerspective = true;
 
-  Vec2 project(Vec3 v) {
-    if (isPerspective) {
-      Vec2 projected = {(v.x * fov_factor) / v.z + width / 2.0f,
-                        (v.y * fov_factor) / v.z + height / 2.0f};
-      return projected;
-    } else {
-      // Ortogonal simple (ignorar Z para escala)
-      float scale = 120.0f; // Zoom fijo
-      Vec2 projected = {v.x * scale + width / 2.0f,
-                        v.y * scale + height / 2.0f};
-      return projected;
-    }
-  }
-
-public:
   // Toggle methods
   void toggleTriangles() { renderTriangles = !renderTriangles; }
   void toggleLines() { renderLines = !renderLines; }
   void togglePoints() { renderPoints = !renderPoints; }
   void toggleCulling() { renderBackface = !renderBackface; }
   void togglePerspective() { isPerspective = !isPerspective; }
+
+private:
+  Vec2 project(Vec3 v) {
+    if (isPerspective) {
+      // Evitar división por cero o Z negativo (detrás de cámara)
+      float z = v.z;
+      if (z < 0.1f)
+        z = 0.1f;
+      Vec2 projected = {(v.x * fov_factor) / z + width / 2.0f,
+                        (v.y * fov_factor) / z + height / 2.0f};
+      return projected;
+    } else {
+      // Ortogonal: escala mucho mayor para que sea visible
+      float scale = 150.0f;
+      Vec2 projected = {v.x * scale + width / 2.0f,
+                        v.y * scale + height / 2.0f};
+      return projected;
+    }
+  }
+
+  // Constructor y metodos de inicialización
 
 public:
   Renderer(int w, int h)
@@ -100,6 +106,61 @@ public:
     }
   }
 
+  // Algoritmo de Rasterización Standard - Relleno de Triangulos
+  void fillTriangle(int x1, int y1, int x2, int y2, int x3, int y3,
+                    uint32_t color) {
+    // Ordenar vértices por Y descendente (y1 <= y2 <= y3)
+    if (y1 > y2) {
+      std::swap(y1, y2);
+      std::swap(x1, x2);
+    }
+    if (y1 > y3) {
+      std::swap(y1, y3);
+      std::swap(x1, x3);
+    }
+    if (y2 > y3) {
+      std::swap(y2, y3);
+      std::swap(x2, x3);
+    }
+
+    auto drawScanline = [&](int y, int xA, int xB) {
+      if (xA > xB)
+        std::swap(xA, xB);
+      for (int x = xA; x <= xB; x++) {
+        drawPixel(x, y, color);
+      }
+    };
+
+    // Alturas de los segmentos
+    int h1 = y2 - y1;
+    int h2 = y3 - y2;
+    int h_total = y3 - y1;
+
+    if (h_total == 0)
+      return;
+
+    // Parte superior (V1-V2)
+    for (int y = y1; y <= y2; y++) {
+      int dy = y - y1;
+      float alpha = (float)dy / h_total;
+      float beta = (h1 == 0) ? 0 : (float)dy / h1;
+      int xA = x1 + (x3 - x1) * alpha;
+      int xB = x1 + (x2 - x1) * beta;
+      drawScanline(y, xA, xB);
+    }
+
+    // Parte inferior (V2-V3)
+    for (int y = y2 + 1; y <= y3; y++) {
+      int dy_total = y - y1;
+      int dy_seg = y - y2;
+      float alpha = (float)dy_total / h_total;
+      float beta = (h2 == 0) ? 0 : (float)dy_seg / h2;
+      int xA = x1 + (x3 - x1) * alpha;
+      int xB = x2 + (x3 - x2) * beta;
+      drawScanline(y, xA, xB);
+    }
+  }
+
   // Pipeline simple
   void renderMesh(const Mesh &mesh, float angleX, float angleY, float angleZ) {
     // Estructura para ordenar caras
@@ -110,8 +171,7 @@ public:
     std::vector<SortedFace> facesToDraw;
 
     // 1. Transformacion y Visibilidad
-    std::vector<Vec3> transformedVertices =
-        mesh.vertices; // Copia para transformar
+    std::vector<Vec3> transformedVertices = mesh.vertices;
 
     for (auto &v : transformedVertices) {
       v = v.rotateX(angleX).rotateY(angleY).rotateZ(angleZ);
@@ -119,7 +179,7 @@ public:
       if (isPerspective) {
         v.z += 5.0f; // Traslación de cámara
       } else {
-        v.z += 0.0f; // En ortogonal no importa tanto, pero centrado
+        v.z += 0.0f;
       }
     }
 
@@ -129,15 +189,25 @@ public:
       Vec3 b = transformedVertices[f.b];
       Vec3 c = transformedVertices[f.c];
 
-      // Backface Culling
       Vec3 ab = b - a;
       Vec3 ac = c - a;
       Vec3 normal = ab.cross(ac);
-      Vec3 cameraRay = a - Vec3(0, 0, 0);
 
-      // Si renderBackface es true, dibujamos todo.
-      // Si es false, solo dibujamos si la normal apunta a camara (< 0)
-      if (renderBackface || normal.dot(cameraRay) < 0) {
+      // Backface Culling logic adaptable
+      bool is_visible = false;
+      if (renderBackface) {
+        is_visible = true;
+      } else {
+        if (isPerspective) {
+          Vec3 cameraRay = a - Vec3(0, 0, 0);
+          is_visible = (normal.dot(cameraRay) < 0);
+        } else {
+          // En ortogonal los rayos son paralelos (mirando hacia Z profundo)
+          is_visible = (normal.z < 0);
+        }
+      }
+
+      if (is_visible) {
         float avgDepth = (a.z + b.z + c.z) / 3.0f;
         facesToDraw.push_back({i, avgDepth});
       }
@@ -157,11 +227,7 @@ public:
       Vec2 pC = project(transformedVertices[f.c]);
 
       if (renderTriangles) {
-        // Dibuja triangulo solido
-        drawLine(pA.x, pA.y, pB.x, pB.y, f.color);
-        drawLine(pB.x, pB.y, pC.x, pC.y, f.color);
-        drawLine(pC.x, pC.y, pA.x, pA.y, f.color);
-        // *Aqui iria el relleno real (fillTriangle)*
+        fillTriangle(pA.x, pA.y, pB.x, pB.y, pC.x, pC.y, f.color);
       }
 
       if (renderLines) {
