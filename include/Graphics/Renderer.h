@@ -16,50 +16,64 @@ private:
   SDL_Renderer *renderer;
   int width, height;
   uint32_t *color_buffer;
+  float *z_buffer;
   SDL_Texture *color_buffer_texture;
 
-  // Parametros de camara
-  float fov_factor = 640.0f; // Ajuste manual de FOV
+  float fov_factor = 600.0f;
 
 public:
-  // Render Flags
   bool renderTriangles = true;
   bool renderLines = true;
   bool renderPoints = false;
-  bool renderBackface = false; // Por defecto culling enabled
+  bool renderBackface = false;
   bool isPerspective = true;
+  bool useShading = true;
 
-  // Toggle methods
   void toggleTriangles() { renderTriangles = !renderTriangles; }
   void toggleLines() { renderLines = !renderLines; }
   void togglePoints() { renderPoints = !renderPoints; }
   void toggleCulling() { renderBackface = !renderBackface; }
   void togglePerspective() { isPerspective = !isPerspective; }
+  void toggleShading() { useShading = !useShading; }
 
 private:
   Vec2 project(Vec3 v) {
     if (isPerspective) {
-      // Evitar división por cero o Z negativo (detrás de cámara)
-      float z = v.z;
-      if (z < 0.1f)
-        z = 0.1f;
-      Vec2 projected = {(v.x * fov_factor) / z + width / 2.0f,
-                        (v.y * fov_factor) / z + height / 2.0f};
-      return projected;
+      float z = std::max(0.1f, v.z);
+      // En SDL +Y es abajo, multiplicamos math-y por -1 para que el cubo rote
+      // "hacia arriba" correctamente o simplemente dejamos que el sistema de
+      // coordenadas sea el que es.
+      return {(v.x * fov_factor) / z + width / 2.0f,
+              (v.y * fov_factor) / z + height / 2.0f};
     } else {
-      // Ortogonal: escala mucho mayor para que sea visible
-      float scale = 150.0f;
-      Vec2 projected = {v.x * scale + width / 2.0f,
-                        v.y * scale + height / 2.0f};
-      return projected;
+      float scale = 200.0f;
+      return {v.x * scale + width / 2.0f, v.y * scale + height / 2.0f};
     }
   }
 
-  // Constructor y metodos de inicialización
+  uint32_t applyShading(uint32_t color, float intensity) {
+    if (!useShading)
+      return color;
+
+    // Curva premium: Sombreado más profundo y progresivo
+    float ambient = 0.05f;
+    float power = 3.0f;
+    float k = ambient +
+              (1.0f - ambient) *
+                  std::pow(std::max(0.0f, std::min(1.0f, intensity)), power);
+
+    uint8_t r = (uint8_t)(((color >> 16) & 0xFF) * k);
+    uint8_t g = (uint8_t)(((color >> 8) & 0xFF) * k);
+    uint8_t b = (uint8_t)((color & 0xFF) * k);
+    return (0xFF000000) | (r << 16) | (g << 8) | b;
+  }
+
+  void clearZBuffer() { std::fill_n(z_buffer, width * height, 10000.0f); }
 
 public:
   Renderer(int w, int h)
-      : width(w), height(h), window(nullptr), renderer(nullptr) {}
+      : width(w), height(h), window(nullptr), renderer(nullptr),
+        color_buffer(nullptr), z_buffer(nullptr) {}
 
   bool init() {
     if (SDL_Init(SDL_INIT_EVERYTHING) != 0)
@@ -70,10 +84,10 @@ public:
       return false;
     renderer = SDL_CreateRenderer(window, -1, 0);
     if (!renderer)
-      return false; // Fallback a software si falla hardware es automático
-                    // usualmente
+      return false;
 
     color_buffer = new uint32_t[width * height];
+    z_buffer = new float[width * height];
     color_buffer_texture =
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
                           SDL_TEXTUREACCESS_STREAMING, width, height);
@@ -82,166 +96,167 @@ public:
 
   void clear(uint32_t color) {
     std::fill_n(color_buffer, width * height, color);
+    clearZBuffer();
   }
 
-  void drawPixel(int x, int y, uint32_t color) {
+  void drawPixel(int x, int y, float z, uint32_t color) {
     if (x >= 0 && x < width && y >= 0 && y < height) {
-      color_buffer[width * y + x] = color;
+      int idx = width * y + x;
+      // Precision check: Usar un pequeño margen para Z-fighting
+      if (z < z_buffer[idx] - 0.001f) {
+        color_buffer[idx] = color;
+        z_buffer[idx] = z;
+      }
     }
   }
 
-  // Algoritmo DDA para lineas
-  void drawLine(int x0, int y0, int x1, int y1, uint32_t color) {
-    int dx = x1 - x0;
-    int dy = y1 - y0;
-    int steps = std::abs(dx) > std::abs(dy) ? std::abs(dx) : std::abs(dy);
-    float xInc = dx / (float)steps;
-    float yInc = dy / (float)steps;
-    float x = x0;
-    float y = y0;
-    for (int i = 0; i <= steps; i++) {
-      drawPixel(std::round(x), std::round(y), color);
-      x += xInc;
-      y += yInc;
+  void drawLine(int x0, int y0, float z0, int x1, int y1, float z1,
+                uint32_t color) {
+    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy, e2;
+    float dist = (float)std::sqrt(dx * dx + dy * dy);
+    int step = 0;
+    while (true) {
+      float t = (dist <= 0) ? 0 : (float)step / dist;
+      float z = z0 + (z1 - z0) * t;
+      drawPixel(x0, y0, z - 0.1f, color); // Líneas siempre un poco al frente
+      if (x0 == x1 && y0 == y1)
+        break;
+      e2 = 2 * err;
+      if (e2 >= dy) {
+        err += dy;
+        x0 += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        y0 += sy;
+      }
+      step++;
     }
   }
 
-  // Algoritmo de Rasterización Standard - Relleno de Triangulos
-  void fillTriangle(int x1, int y1, int x2, int y2, int x3, int y3,
+  void fillTriangle(int x1, int y1, float z1, float i1, int x2, int y2,
+                    float z2, float i2, int x3, int y3, float z3, float i3,
                     uint32_t color) {
-    // Ordenar vértices por Y descendente (y1 <= y2 <= y3)
     if (y1 > y2) {
       std::swap(y1, y2);
       std::swap(x1, x2);
+      std::swap(z1, z2);
+      std::swap(i1, i2);
     }
     if (y1 > y3) {
       std::swap(y1, y3);
       std::swap(x1, x3);
+      std::swap(z1, z3);
+      std::swap(i1, i3);
     }
     if (y2 > y3) {
       std::swap(y2, y3);
       std::swap(x2, x3);
+      std::swap(z2, z3);
+      std::swap(i2, i3);
     }
 
-    auto drawScanline = [&](int y, int xA, int xB) {
-      if (xA > xB)
-        std::swap(xA, xB);
-      for (int x = xA; x <= xB; x++) {
-        drawPixel(x, y, color);
+    for (int y = y1; y <= y3; y++) {
+      float alpha = (y3 == y1) ? 0 : (float)(y - y1) / (y3 - y1);
+      bool second_half = (y > y2 || y2 == y1);
+      float beta = second_half ? (y3 == y2 ? 0 : (float)(y - y2) / (y3 - y2))
+                               : (y2 == y1 ? 0 : (float)(y - y1) / (y2 - y1));
+
+      float xS = x1 + (x3 - x1) * alpha;
+      float zS = z1 + (z3 - z1) * alpha;
+      float iS = i1 + (i3 - i1) * alpha;
+
+      float xE = second_half ? x2 + (x3 - x2) * beta : x1 + (x2 - x1) * beta;
+      float zE = second_half ? z2 + (z3 - z2) * beta : z1 + (z2 - z1) * beta;
+      float iE = second_half ? i2 + (i3 - i2) * beta : i1 + (i2 - i1) * beta;
+
+      if (xS > xE) {
+        std::swap(xS, xE);
+        std::swap(zS, zE);
+        std::swap(iS, iE);
       }
-    };
 
-    // Alturas de los segmentos
-    int h1 = y2 - y1;
-    int h2 = y3 - y2;
-    int h_total = y3 - y1;
-
-    if (h_total == 0)
-      return;
-
-    // Parte superior (V1-V2)
-    for (int y = y1; y <= y2; y++) {
-      int dy = y - y1;
-      float alpha = (float)dy / h_total;
-      float beta = (h1 == 0) ? 0 : (float)dy / h1;
-      int xA = x1 + (x3 - x1) * alpha;
-      int xB = x1 + (x2 - x1) * beta;
-      drawScanline(y, xA, xB);
-    }
-
-    // Parte inferior (V2-V3)
-    for (int y = y2 + 1; y <= y3; y++) {
-      int dy_total = y - y1;
-      int dy_seg = y - y2;
-      float alpha = (float)dy_total / h_total;
-      float beta = (h2 == 0) ? 0 : (float)dy_seg / h2;
-      int xA = x1 + (x3 - x1) * alpha;
-      int xB = x2 + (x3 - x2) * beta;
-      drawScanline(y, xA, xB);
+      for (int x = (int)xS; x <= (int)xE; x++) {
+        float phi = (xE == xS) ? 0 : (float)(x - xS) / (xE - xS);
+        phi = std::max(0.0f, std::min(1.0f, phi));
+        float z = zS + (zE - zS) * phi;
+        float intensity = iS + (iE - iS) * phi;
+        drawPixel(x, y, z, applyShading(color, intensity));
+      }
     }
   }
 
-  // Pipeline simple
   void renderMesh(const Mesh &mesh, float angleX, float angleY, float angleZ) {
-    // Estructura para ordenar caras
-    struct SortedFace {
-      int id;
-      float depth;
-    };
-    std::vector<SortedFace> facesToDraw;
+    std::vector<Vec3> tv = mesh.vertices;
+    std::vector<Vec3> vn(mesh.vertices.size(), Vec3(0, 0, 0));
 
-    // 1. Transformacion y Visibilidad
-    std::vector<Vec3> transformedVertices = mesh.vertices;
-
-    for (auto &v : transformedVertices) {
+    // 1. Transformación de rotación
+    for (auto &v : tv) {
       v = v.rotateX(angleX).rotateY(angleY).rotateZ(angleZ);
-
-      if (isPerspective) {
-        v.z += 5.0f; // Traslación de cámara
-      } else {
-        v.z += 0.0f;
-      }
     }
 
-    for (int i = 0; i < mesh.faces.size(); i++) {
-      const Face &f = mesh.faces[i];
-      Vec3 a = transformedVertices[f.a];
-      Vec3 b = transformedVertices[f.b];
-      Vec3 c = transformedVertices[f.c];
+    // Normales por vertice (promedio de caras)
+    for (const auto &f : mesh.faces) {
+      Vec3 n = (tv[f.b] - tv[f.a]).cross(tv[f.c] - tv[f.a]);
+      vn[f.a] = vn[f.a] + n;
+      vn[f.b] = vn[f.b] + n;
+      vn[f.c] = vn[f.c] + n;
+    }
+    for (auto &n : vn)
+      n.normalize();
 
-      Vec3 ab = b - a;
-      Vec3 ac = c - a;
-      Vec3 normal = ab.cross(ac);
+    // 2. Traslación (Z-offset para que el cubo esté "dentro" de la escena)
+    for (auto &v : tv)
+      v.z += 5.0f;
 
-      // Backface Culling logic adaptable
-      bool is_visible = false;
-      if (renderBackface) {
-        is_visible = true;
-      } else {
-        if (isPerspective) {
-          Vec3 cameraRay = a - Vec3(0, 0, 0);
-          is_visible = (normal.dot(cameraRay) < 0);
-        } else {
-          // En ortogonal los rayos son paralelos (mirando hacia Z profundo)
-          is_visible = (normal.z < 0);
+    // Posición de la luz para degradado (Puntual desde el hombro superior)
+    Vec3 lightPos(2, -2, 0);
+
+    for (const auto &f : mesh.faces) {
+      Vec3 a = tv[f.a], b = tv[f.b], c = tv[f.c];
+
+      // Face Normal
+      Vec3 fn = (b - a).cross(c - a);
+
+      // View vector (desde cámara en 0,0,0 hacia el objeto)
+      // En orto, la cámara "ve" paralela al eje Z.
+      Vec3 view = isPerspective ? a : Vec3(0, 0, 1);
+
+      // Culling: Si fn.dot(view) < 0, la cara mira a la camara
+      bool isVisible = renderBackface ? true : (fn.dot(view) < 0);
+
+      if (isVisible) {
+        Vec2 pA = project(a), pB = project(b), pC = project(c);
+
+        if (renderTriangles) {
+          // Shading: Luz puntual para crear gradiante progresivo
+          auto calcInt = [&](Vec3 v, Vec3 n) {
+            Vec3 dir = (v - lightPos);
+            dir.normalize();
+            return std::max(0.0f, n.dot(dir * -1.0f));
+          };
+
+          float i1 = calcInt(a, vn[f.a]);
+          float i2 = calcInt(b, vn[f.b]);
+          float i3 = calcInt(c, vn[f.c]);
+
+          fillTriangle((int)pA.x, (int)pA.y, a.z, i1, (int)pB.x, (int)pB.y, b.z,
+                       i2, (int)pC.x, (int)pC.y, c.z, i3, f.color);
         }
-      }
-
-      if (is_visible) {
-        float avgDepth = (a.z + b.z + c.z) / 3.0f;
-        facesToDraw.push_back({i, avgDepth});
-      }
-    }
-
-    // 2. Ordenamiento
-    std::sort(facesToDraw.begin(), facesToDraw.end(),
-              [](const SortedFace &a, const SortedFace &b) {
-                return a.depth > b.depth;
-              });
-
-    // 3. Proyeccion y Dibujado
-    for (auto &sf : facesToDraw) {
-      const Face &f = mesh.faces[sf.id];
-      Vec2 pA = project(transformedVertices[f.a]);
-      Vec2 pB = project(transformedVertices[f.b]);
-      Vec2 pC = project(transformedVertices[f.c]);
-
-      if (renderTriangles) {
-        fillTriangle(pA.x, pA.y, pB.x, pB.y, pC.x, pC.y, f.color);
-      }
-
-      if (renderLines) {
-        uint32_t wireColor = 0xFFFFFFFF; // Blanco
-        drawLine(pA.x, pA.y, pB.x, pB.y, wireColor);
-        drawLine(pB.x, pB.y, pC.x, pC.y, wireColor);
-        drawLine(pC.x, pC.y, pA.x, pA.y, wireColor);
-      }
-
-      if (renderPoints) {
-        uint32_t vertColor = 0xFFFF0000; // Rojo
-        drawPixel(pA.x, pA.y, vertColor);
-        drawPixel(pB.x, pB.y, vertColor);
-        drawPixel(pC.x, pC.y, vertColor);
+        if (renderLines) {
+          uint32_t lc = 0xFFFFFFFF;
+          drawLine((int)pA.x, (int)pA.y, a.z, (int)pB.x, (int)pB.y, b.z, lc);
+          drawLine((int)pB.x, (int)pB.y, b.z, (int)pC.x, (int)pC.y, c.z, lc);
+          drawLine((int)pC.x, (int)pC.y, c.z, (int)pA.x, (int)pA.y, a.z, lc);
+        }
+        if (renderPoints) {
+          uint32_t pc = 0xFFFF0000;
+          drawPixel((int)pA.x, (int)pA.y, a.z - 0.2f, pc);
+          drawPixel((int)pB.x, (int)pB.y, b.z - 0.2f, pc);
+          drawPixel((int)pC.x, (int)pC.y, c.z - 0.2f, pc);
+        }
       }
     }
   }
@@ -255,13 +270,12 @@ public:
 
   void destroy() {
     delete[] color_buffer;
+    delete[] z_buffer;
     SDL_DestroyTexture(color_buffer_texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
   }
-
-  SDL_Renderer *getSDLRenderer() { return renderer; } // Backdoor si se necesita
 };
 
 #endif

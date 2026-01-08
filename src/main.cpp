@@ -47,20 +47,28 @@ int main(int argc, char *argv[]) {
         case SDLK_ESCAPE:
           isRunning = false;
           break;
-        case SDLK_f:
-          renderer.toggleTriangles();
-          break;
-        case SDLK_l:
-          renderer.toggleLines();
-          break;
+        case SDLK_1:
         case SDLK_v:
           renderer.togglePoints();
           break;
-        case SDLK_p:
-          renderer.togglePerspective();
+        case SDLK_2:
+        case SDLK_l:
+          renderer.toggleLines();
           break;
+        case SDLK_3:
+        case SDLK_f:
+          renderer.toggleTriangles();
+          break;
+        case SDLK_4:
+          renderer.toggleShading();
+          break;
+        case SDLK_5:
         case SDLK_c:
           renderer.toggleCulling();
+          break;
+        case SDLK_6:
+        case SDLK_p:
+          renderer.togglePerspective();
           break;
         }
       }
