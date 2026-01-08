@@ -1,0 +1,9 @@
+bin/
+obj/
+*.exe
+*.o
+*.tar.gz
+*.log
+.vscode/
+cmake-build-debug/
+.idea/
