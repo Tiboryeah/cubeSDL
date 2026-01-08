@@ -4,7 +4,6 @@
 #include <SDL.h>
 #include <iostream>
 
-
 int main(int argc, char *argv[]) {
   // Configuración
   const int WIDTH = 800;
@@ -29,29 +28,61 @@ int main(int argc, char *argv[]) {
 
   float angleX = 0, angleY = 0, angleZ = 0;
 
+  // Control de Tiempo (60 FPS)
+  const int FPS = 60;
+  const int FRAME_DELAY = 1000 / FPS;
+  Uint32 frameStart;
+  int frameTime;
+
   // Loop Principal
   while (isRunning) {
+    frameStart = SDL_GetTicks();
+
     // Input
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_QUIT)
         isRunning = false;
-      if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
-        isRunning = false;
+      if (event.type == SDL_KEYDOWN) {
+        switch (event.key.keysym.sym) {
+        case SDLK_ESCAPE:
+          isRunning = false;
+          break;
+        case SDLK_f:
+          renderer.toggleTriangles();
+          break;
+        case SDLK_l:
+          renderer.toggleLines();
+          break;
+        case SDLK_v:
+          renderer.togglePoints();
+          break;
+        case SDLK_p:
+          renderer.togglePerspective();
+          break;
+        case SDLK_c:
+          renderer.toggleCulling();
+          break;
+        }
+      }
     }
 
     // Update
     angleX += 0.01f;
-    angleY += 0.02f;
+    angleY += 0.01f;
     angleZ += 0.01f;
 
     // Render
     renderer.clear(0x000000); // Negro
 
-    // Grid de fondo opcional o HUD podría ir aqui
-
     renderer.renderMesh(mesh, angleX, angleY, angleZ);
 
     renderer.present();
+
+    // Frame Cap
+    frameTime = SDL_GetTicks() - frameStart;
+    if (FRAME_DELAY > frameTime) {
+      SDL_Delay(FRAME_DELAY - frameTime);
+    }
   }
 
   renderer.destroy();

@@ -21,11 +21,35 @@ private:
   // Parametros de camara
   float fov_factor = 640.0f; // Ajuste manual de FOV
 
+  // Render Flags
+  bool renderTriangles = true;
+  bool renderLines = true;
+  bool renderPoints = false;
+  bool renderBackface =
+      false; // Por defecto culling enabled (no renderizar backfaces)
+  bool isPerspective = true;
+
   Vec2 project(Vec3 v) {
-    Vec2 projected = {(v.x * fov_factor) / v.z + width / 2.0f,
-                      (v.y * fov_factor) / v.z + height / 2.0f};
-    return projected;
+    if (isPerspective) {
+      Vec2 projected = {(v.x * fov_factor) / v.z + width / 2.0f,
+                        (v.y * fov_factor) / v.z + height / 2.0f};
+      return projected;
+    } else {
+      // Ortogonal simple (ignorar Z para escala)
+      float scale = 120.0f; // Zoom fijo
+      Vec2 projected = {v.x * scale + width / 2.0f,
+                        v.y * scale + height / 2.0f};
+      return projected;
+    }
   }
+
+public:
+  // Toggle methods
+  void toggleTriangles() { renderTriangles = !renderTriangles; }
+  void toggleLines() { renderLines = !renderLines; }
+  void togglePoints() { renderPoints = !renderPoints; }
+  void toggleCulling() { renderBackface = !renderBackface; }
+  void togglePerspective() { isPerspective = !isPerspective; }
 
 public:
   Renderer(int w, int h)
@@ -91,7 +115,12 @@ public:
 
     for (auto &v : transformedVertices) {
       v = v.rotateX(angleX).rotateY(angleY).rotateZ(angleZ);
-      v.z += 5.0f; // Traslación de cámara hacia atrás
+
+      if (isPerspective) {
+        v.z += 5.0f; // Traslación de cámara
+      } else {
+        v.z += 0.0f; // En ortogonal no importa tanto, pero centrado
+      }
     }
 
     for (int i = 0; i < mesh.faces.size(); i++) {
@@ -100,23 +129,24 @@ public:
       Vec3 b = transformedVertices[f.b];
       Vec3 c = transformedVertices[f.c];
 
-      // Backface Culling (Producto Cruz y Normal)
+      // Backface Culling
       Vec3 ab = b - a;
       Vec3 ac = c - a;
       Vec3 normal = ab.cross(ac);
-      Vec3 cameraRay = a - Vec3(0, 0, 0); // Asumiendo camara en 0,0,0
+      Vec3 cameraRay = a - Vec3(0, 0, 0);
 
-      if (normal.dot(cameraRay) <
-          0) { // Visible si la normal apunta al observador
+      // Si renderBackface es true, dibujamos todo.
+      // Si es false, solo dibujamos si la normal apunta a camara (< 0)
+      if (renderBackface || normal.dot(cameraRay) < 0) {
         float avgDepth = (a.z + b.z + c.z) / 3.0f;
         facesToDraw.push_back({i, avgDepth});
       }
     }
 
-    // 2. Ordenamiento (Painter's Algorithm)
+    // 2. Ordenamiento
     std::sort(facesToDraw.begin(), facesToDraw.end(),
               [](const SortedFace &a, const SortedFace &b) {
-                return a.depth > b.depth; // Dibujar de atras hacia adelante
+                return a.depth > b.depth;
               });
 
     // 3. Proyeccion y Dibujado
@@ -126,14 +156,27 @@ public:
       Vec2 pB = project(transformedVertices[f.b]);
       Vec2 pC = project(transformedVertices[f.c]);
 
-      // Dibujar triangulo (wireframe por ahora, mas facil de implementar
-      // rapido)
-      drawLine(pA.x, pA.y, pB.x, pB.y, f.color);
-      drawLine(pB.x, pB.y, pC.x, pC.y, f.color);
-      drawLine(pC.x, pC.y, pA.x, pA.y, f.color);
+      if (renderTriangles) {
+        // Dibuja triangulo solido
+        drawLine(pA.x, pA.y, pB.x, pB.y, f.color);
+        drawLine(pB.x, pB.y, pC.x, pC.y, f.color);
+        drawLine(pC.x, pC.y, pA.x, pA.y, f.color);
+        // *Aqui iria el relleno real (fillTriangle)*
+      }
 
-      // Si quisieramos relleno, aqui iria el algoritmo de rasterizacion de
-      // triangulos (Flat Shading)
+      if (renderLines) {
+        uint32_t wireColor = 0xFFFFFFFF; // Blanco
+        drawLine(pA.x, pA.y, pB.x, pB.y, wireColor);
+        drawLine(pB.x, pB.y, pC.x, pC.y, wireColor);
+        drawLine(pC.x, pC.y, pA.x, pA.y, wireColor);
+      }
+
+      if (renderPoints) {
+        uint32_t vertColor = 0xFFFF0000; // Rojo
+        drawPixel(pA.x, pA.y, vertColor);
+        drawPixel(pB.x, pB.y, vertColor);
+        drawPixel(pC.x, pC.y, vertColor);
+      }
     }
   }
 
